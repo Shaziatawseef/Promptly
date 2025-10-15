@@ -1,12 +1,13 @@
-PORT = int(os.environ.get("PORT", 9990))
-PASSWORD = "1234"  # change it
-ADMIN_PASSWORD = "admin123"  # change it
 import asyncio
 import websockets
 import base64
 import os
 import datetime
 from colorama import Fore, Style, init
+
+PORT = int(os.environ.get("PORT", 9990))
+PASSWORD = "1234"  # change it
+ADMIN_PASSWORD = "admin123"  # change it
 
 init(autoreset=True)
 
@@ -279,4 +280,5 @@ async def main():
 if __name__ == "__main__":
     import asyncio
     asyncio.run(main())
+
 
