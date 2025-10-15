@@ -1,0 +1,2 @@
+websockets==13.1
+colorama==0.4.6
