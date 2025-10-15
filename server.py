@@ -1,7 +1,6 @@
-PORT = 9990 # change it
-PASSWORD = "1234" # change it
-ADMIN_PASSWORD = "admin123" # change it
-
+PORT = int(os.environ.get("PORT", 9990))
+PASSWORD = "1234"  # change it
+ADMIN_PASSWORD = "admin123"  # change it
 import asyncio
 import websockets
 import base64
@@ -280,3 +279,4 @@ async def main():
 if __name__ == "__main__":
     import asyncio
     asyncio.run(main())
+
