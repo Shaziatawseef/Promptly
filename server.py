@@ -4,7 +4,6 @@ import websockets
 import base64
 import datetime
 from colorama import Fore, Style, init
-from aiohttp import web  # Added for health endpoint
 
 PORT = int(os.environ.get("PORT", 9990))
 PASSWORD = "1234"  # change it
@@ -273,26 +272,10 @@ async def handler(ws, path):
         await send_online_users()
 
 
-async def health_handler(request):
-    return web.Response(text="OK", status=200)
-
-
 async def main():
     print(Fore.GREEN + f"Server running on port {PORT}" + Style.RESET_ALL)
-
-    # WebSocket server
-    ws_server = await websockets.serve(handler, "0.0.0.0", PORT)
-
-    # HTTP health endpoint
-    app = web.Application()
-    app.router.add_get("/healthz", health_handler)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", PORT + 1)  # health on next port
-    await site.start()
-
-    print(Fore.CYAN + f"Health check running on port {PORT + 1}/healthz" + Style.RESET_ALL)
-    await ws_server.wait_closed()
+    server = await websockets.serve(handler, "0.0.0.0", PORT)
+    await server.wait_closed()
 
 
 if __name__ == "__main__":
