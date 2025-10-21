@@ -1,9 +1,10 @@
+import os
 import asyncio
 import websockets
 import base64
-import os
 import datetime
 from colorama import Fore, Style, init
+from aiohttp import web  # Added for health endpoint
 
 PORT = int(os.environ.get("PORT", 9990))
 PASSWORD = "1234"  # change it
@@ -11,12 +12,11 @@ ADMIN_PASSWORD = "admin123"  # change it
 
 init(autoreset=True)
 
-
 LOG_FILE = "chat.log"
 
-clients = {} 
-users = {}   
-warn_count = {}  
+clients = {}
+users = {}
+warn_count = {}
 banned_users = set()
 muted_users = set()
 
@@ -217,6 +217,7 @@ async def handle_message(ws, username, message):
     await broadcast(full_msg, exclude_ws=ws)
     await ws.send(Fore.GREEN + f"[{time}] You: {message}" + Style.RESET_ALL)
 
+
 async def handler(ws, path):
     await ws.send("Please enter password:")
     password = await ws.recv()
@@ -272,13 +273,27 @@ async def handler(ws, path):
         await send_online_users()
 
 
+async def health_handler(request):
+    return web.Response(text="OK", status=200)
+
+
 async def main():
     print(Fore.GREEN + f"Server running on port {PORT}" + Style.RESET_ALL)
-    server = await websockets.serve(handler, "0.0.0.0", PORT)
-    await server.wait_closed()
+
+    # WebSocket server
+    ws_server = await websockets.serve(handler, "0.0.0.0", PORT)
+
+    # HTTP health endpoint
+    app = web.Application()
+    app.router.add_get("/healthz", health_handler)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", PORT + 1)  # health on next port
+    await site.start()
+
+    print(Fore.CYAN + f"Health check running on port {PORT + 1}/healthz" + Style.RESET_ALL)
+    await ws_server.wait_closed()
+
 
 if __name__ == "__main__":
-    import asyncio
     asyncio.run(main())
-
-
