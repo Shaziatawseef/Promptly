@@ -4,6 +4,7 @@ import websockets
 import base64
 import datetime
 from colorama import Fore, Style, init
+from aiohttp import web  # ✅ added for HTTP keep-alive endpoint
 
 PORT = int(os.environ.get("PORT", 9990))
 PASSWORD = "1234"  # change it
@@ -272,9 +273,23 @@ async def handler(ws, path):
         await send_online_users()
 
 
+# ✅ Added HTTP keep-alive endpoint
+async def http_healthcheck(request):
+    return web.Response(text="Promptly server alive", content_type="text/plain")
+
+async def start_http_server():
+    app = web.Application()
+    app.router.add_get("/", http_healthcheck)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", 8080)
+    await site.start()
+
+
 async def main():
     print(Fore.GREEN + f"Server running on port {PORT}" + Style.RESET_ALL)
     server = await websockets.serve(handler, "0.0.0.0", PORT)
+    await start_http_server()  # ✅ start the HTTP server
     await server.wait_closed()
 
 
