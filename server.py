@@ -1,3 +1,5 @@
+import os
+
 # server.py
 # Defaults (can be overridden by environment variables on Render)
 PORT = int(os.environ.get("PORT", 9990))  # change it via env on Render
@@ -371,3 +373,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         log("Server shutting down.", level="warning")
+
