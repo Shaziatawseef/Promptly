@@ -1,4 +1,3 @@
-os
 websockets
 colorama
 aiohttp
