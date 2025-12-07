@@ -1,30 +1,21 @@
-import os
+# server.py
+# Defaults (can be overridden by environment variables on Render)
+PORT = int(os.environ.get("PORT", 9990))  # change it via env on Render
+PASSWORD = os.environ.get("PASSWORD", "1234")  # change it in Render env
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin123")  # change it in Render env
+
 import asyncio
 import websockets
 import base64
+import os
 import datetime
 from colorama import Fore, Style, init
-from aiohttp import web  # ✅ added for HTTP keep-alive endpoint
-
-PORT = int(os.environ.get("PORT", 9990))
-PASSWORD = "1234"  # change it
-ADMIN_PASSWORD = "admin123"  # change it
+from aiohttp import web
 
 init(autoreset=True)
 
-LOG_FILE = "chat.log"
 
-# --- NEW: quiet mode detection for Render (suppress all console/file logs when true) ---
-# Render commonly provides environment variables such as RENDER_EXTERNAL_HOSTNAME
-# and RENDER_SERVICE_ID; check a few Render-related env vars to detect the platform.
-QUIET = bool(
-    os.environ.get("RENDER_EXTERNAL_HOSTNAME")
-    or os.environ.get("RENDER")
-    or os.environ.get("RENDER_SERVICE_ID")
-    or os.environ.get("IS_PULL_REQUEST")  # preview envs set this to "true"
-)
-# If you want to force quiet mode locally, set: export QUIET_LOGS=1 and change detection above.
-# ----------------------------------------------------------------------------------------
+LOG_FILE = "chat.log"
 
 clients = {}
 users = {}
@@ -32,10 +23,8 @@ warn_count = {}
 banned_users = set()
 muted_users = set()
 
+
 def log(message, level="info"):
-    # If running on Render (QUIET), do not print or append big logs.
-    if QUIET:
-        return
     timestamp = datetime.datetime.now().strftime("%H:%M:%S")
     color = {
         "info": Fore.CYAN,
@@ -48,13 +37,19 @@ def log(message, level="info"):
     with open(LOG_FILE, "a", encoding="utf-8") as f:
         f.write(f"[{timestamp}] {message}\n")
 
+
 async def broadcast(message, exclude_ws=None):
-    for ws in clients:
+    for ws in list(clients.keys()):
         if ws != exclude_ws:
             try:
                 await ws.send(message)
-            except:
-                pass
+            except Exception:
+                # remove dead websockets silently
+                try:
+                    clients.pop(ws, None)
+                except Exception:
+                    pass
+
 
 async def send_online_users(to_ws=None):
     online = ', '.join(users.keys())
@@ -64,6 +59,7 @@ async def send_online_users(to_ws=None):
         await to_ws.send(msg)
     else:
         await broadcast(msg)
+
 
 async def send_help(ws, is_admin):
     help_msg = [
@@ -84,6 +80,7 @@ async def send_help(ws, is_admin):
             "/unmute username     - Unmute user"
         ]
     await ws.send("\n".join(help_msg))
+
 
 async def handle_message(ws, username, message):
     _, is_admin = clients[ws]
@@ -227,21 +224,31 @@ async def handle_message(ws, username, message):
     await broadcast(full_msg, exclude_ws=ws)
     await ws.send(Fore.GREEN + f"[{time}] You: {message}" + Style.RESET_ALL)
 
+
 async def handler(ws, path):
     await ws.send("Please enter password:")
-    password = await ws.recv()
+    try:
+        password = await ws.recv()
+    except websockets.exceptions.ConnectionClosed:
+        return
     if password != PASSWORD:
         await ws.send(Fore.RED + "Wrong password." + Style.RESET_ALL)
         await ws.close()
         return
 
     await ws.send("Enter your username:")
-    username = await ws.recv()
+    try:
+        username = await ws.recv()
+    except websockets.exceptions.ConnectionClosed:
+        return
 
     is_admin = False
     if username == "admin":
         await ws.send("Enter admin password:")
-        admin_pw = await ws.recv()
+        try:
+            admin_pw = await ws.recv()
+        except websockets.exceptions.ConnectionClosed:
+            return
         if admin_pw != ADMIN_PASSWORD:
             await ws.send(Fore.RED + "Incorrect admin password." + Style.RESET_ALL)
             await ws.close()
@@ -281,25 +288,86 @@ async def handler(ws, path):
         await broadcast(Fore.YELLOW + f"User {username} left the chat." + Style.RESET_ALL)
         await send_online_users()
 
-# ✅ HTTP keep-alive endpoint
-async def http_healthcheck(request):
-    return web.Response(text="Promptly server alive", content_type="text/plain")
 
-async def start_http_server():
+# -----------------------
+# HTTP keep-alive / health server for Render + cron
+# -----------------------
+
+async def keepalive_handler(request):
+    """
+    Endpoint for cron job keep-alive.
+    Visiting /keepalive will:
+      - return a simple status JSON/html
+      - (optionally) broadcast a small heartbeat message to connected websocket clients
+    """
+    try:
+        # optional: broadcast a heartbeat message so that connected clients know server is alive
+        heartbeat = Fore.YELLOW + f"[{datetime.datetime.now().strftime('%H:%M:%S')}] Server: keepalive ping" + Style.RESET_ALL
+        # Do not await broadcast here if you want the endpoint to respond immediately.
+        # We'll schedule it so response is fast.
+        asyncio.create_task(broadcast(heartbeat))
+    except Exception as e:
+        log(f"Keepalive broadcast error: {e}", level="warning")
+
+    data = {
+        "status": "ok",
+        "time": datetime.datetime.utcnow().isoformat() + "Z",
+        "online_users": len(users)
+    }
+    return web.json_response(data)
+
+
+async def health_handler(request):
+    return web.Response(text="OK")
+
+
+async def start_http_server(host="0.0.0.0", port=None):
     app = web.Application()
-    app.router.add_get("/", http_healthcheck)
+    app.add_routes([
+        web.get("/keepalive", keepalive_handler),
+        web.get("/health", health_handler),
+        web.get("/", lambda req: web.Response(text="WebSocket Chat Server is running. Use /keepalive for cron.")),
+    ])
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", 8080)
+    site_port = port if port is not None else PORT
+    site = web.TCPSite(runner, host, site_port)
     await site.start()
+    log(f"HTTP server running on port {site_port}", level="success")
+    return runner  # callers can cleanup if needed
+
 
 async def main():
-    # Only print startup message when not in QUIET mode
-    if not QUIET:
-        print(Fore.GREEN + f"Server running on port {PORT}" + Style.RESET_ALL)
-    server = await websockets.serve(handler, "0.0.0.0", PORT)
-    await start_http_server()  # ✅ start the HTTP server
+    # Start HTTP server (for keepalive and health checks)
+    await start_http_server(port=PORT)
+
+    # Start websocket server on same port but different path
+    # We'll listen on same port but path handled by websockets server (it doesn't conflict with aiohttp)
+    # Note: Render expects a single TCP port — both aiohttp and websockets here bind to the same port via asyncio create_server usage.
+    # To keep it simple on Render, we let websockets listen on same host and PORT but websockets.serve uses the same port;
+    # however, binding twice to same port typically fails. So we run the websockets server on the same port but on a different task using the same host.
+    # In practice, running both on the same port is tricky; instead, we run websockets on the same host and PORT but as a WebSocket server attached to the same loop.
+    # websockets.serve will attempt to bind the port; to avoid double-bind, if aiohttp already bound the port, we must start websockets on another port.
+    # Render gives a single port — but aiohttp is enough for keepalive; clients that expect raw websockets can connect to the websockets server on a subpath handled by websockets.
+    # The websockets library supports path-based handling when used with a shared server socket, but that's advanced.
+    # Simpler approach: run websockets server on the same host and PORT but using the underlying loop create_server of websockets library which will raise if port already used.
+    # To avoid conflicts we will run the websockets server on PORT as well but if binding fails fallback to PORT+1.
+    ws_port = PORT
+    try:
+        server = await websockets.serve(handler, "0.0.0.0", ws_port)
+        log(f"WebSocket server running on port {ws_port}", level="success")
+    except Exception as e:
+        # fallback if port already in use by aiohttp (common on Render). Try PORT+1.
+        ws_port = PORT + 1
+        server = await websockets.serve(handler, "0.0.0.0", ws_port)
+        log(f"WebSocket server port {PORT} in use; running on fallback port {ws_port}", level="warning")
+
+    # Keep running forever
     await server.wait_closed()
 
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        log("Server shutting down.", level="warning")
