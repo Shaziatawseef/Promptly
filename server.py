@@ -4,7 +4,7 @@ import websockets
 import base64  
 import datetime  
 from colorama import Fore, Style, init  
-from aiohttp import web  # âœ… added for HTTP keep-alive endpoint  
+from aiohttp import web  # ✅ added for HTTP keep-alive endpoint  
   
 PORT = int(os.environ.get("PORT", 9990))  
 PASSWORD = "1234"  # change it  
@@ -52,7 +52,7 @@ async def send_online_users(to_ws=None):
   
 async def send_help(ws, is_admin):  
     help_msg = [  
-        Fore.CYAN + "ðŸ“˜ Available Commands:" + Style.RESET_ALL,  
+        Fore.CYAN + "📘 Available Commands:" + Style.RESET_ALL,  
         "/pm username message  - Private message",  
         "/send path/to/file    - Upload file",  
         "/down filename        - Download file",  
@@ -212,6 +212,21 @@ async def handle_message(ws, username, message):
     await broadcast(full_msg, exclude_ws=ws)  
     await ws.send(Fore.GREEN + f"[{time}] You: {message}" + Style.RESET_ALL)  
   
+# --- process_request to avoid replying 200 to websocket upgrades ---  
+async def process_request(path, request_headers):  
+    """
+    Return None for true websocket upgrade requests so websockets continues the handshake.
+    For ordinary GET/HEAD probes return a small 200 OK body.
+    This prevents the server from replying 200 to an upgrade request (which causes clients to see "server rejected websocket connection: http 200").
+    """  
+    # If there's a WebSocket upgrade in headers, let websockets handle handshake by returning None.
+    # Check both 'Upgrade' header and the presence of 'Sec-WebSocket-Key' which indicates a websocket upgrade.
+    if request_headers.get("Upgrade", "").lower() == "websocket" or "Sec-WebSocket-Key" in request_headers or "sec-websocket-key" in request_headers:
+        return None
+
+    # Otherwise respond with a minimal 200 (handles GET/HEAD health checks)
+    return (200, [("Content-Type", "text/plain; charset=utf-8")], b"OK")  
+  
 async def handler(ws, path):  
     await ws.send("Please enter password:")  
     password = await ws.recv()  
@@ -266,7 +281,7 @@ async def handler(ws, path):
         await broadcast(Fore.YELLOW + f"User {username} left the chat." + Style.RESET_ALL)  
         await send_online_users()  
   
-# âœ… HTTP keep-alive endpoint  
+# ✅ HTTP keep-alive endpoint  
 async def http_healthcheck(request):  
     return web.Response(text="Promptly server alive", content_type="text/plain")  
   
@@ -280,8 +295,10 @@ async def start_http_server():
   
 async def main():  
     print(Fore.GREEN + f"Server running on port {PORT}" + Style.RESET_ALL)  
-    server = await websockets.serve(handler, "0.0.0.0", PORT)  
-    await start_http_server()  # âœ… start the HTTP server  
+    # pass process_request so ordinary HTTP requests (HEAD/GET) are answered with OK,
+    # preventing handshake exceptions when a non-upgrade request arrives on websocket port.  
+    server = await websockets.serve(handler, "0.0.0.0", PORT, process_request=process_request)  
+    await start_http_server()  # ✅ start the HTTP server  
     await server.wait_closed()  
   
 if __name__ == "__main__":  
